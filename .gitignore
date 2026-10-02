@@ -1,4 +1,14 @@
-
-worker.env.yaml
+node_modules
+.next
 .remotion
+.env
+.env.*
+!.env.example
+worker.env.yaml
 *.tsbuildinfo
+playwright-report
+test-results
+.vercel
+*.zip
+.DS_Store
+npm-debug.log*
