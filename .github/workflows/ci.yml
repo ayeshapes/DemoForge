@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Cancel superseded runs on the same branch/PR instead of letting an old
 # push's E2E job (the slow one, with a Postgres service container and a
@@ -21,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -36,6 +37,9 @@ jobs:
 
   e2e:
     name: E2E tests (Playwright)
+    # Needs Clerk test secrets (E2E_CLERK_*) in the repo settings. Run it by hand
+    # from the Actions tab once those exist; it is skipped on normal pushes.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
 
     # DF-21.6: a real Postgres, not a mock -- these tests exercise the app
@@ -84,7 +88,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -94,7 +98,7 @@ jobs:
       # DF-21.6: schema only, against the fresh service container above --
       # `migrate deploy` (not `migrate dev`) since this is CI, not a local
       # dev database, and there are no migrations to interactively create.
-      - run: npx prisma migrate deploy
+      - run: npx prisma db push
 
       - name: Install Playwright's Chromium
         run: npx playwright install --with-deps chromium
