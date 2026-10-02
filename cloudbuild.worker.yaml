@@ -1,0 +1,9 @@
+# Builds Dockerfile.worker on Google Cloud Build and pushes it to Artifact Registry.
+# Usage: see DEPLOY-FREE.md
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.worker", "-t", "${_IMAGE}", "."]
+images:
+  - ${_IMAGE}
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/PROJECT_ID/demoforge/worker:latest

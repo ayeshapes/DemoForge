@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR instead of letting an old
+# push's E2E job (the slow one, with a Postgres service container and a
+# real browser download) keep running after a newer push.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # lib/prisma.ts imports the generated @prisma/client -- vitest's
+      # mocks (vi.mock("@/lib/prisma")) mean no route test ever touches a
+      # real database, but the module still has to resolve to *something*
+      # at import time.
+      - run: npm run prisma:generate
+
+      - run: npm test
+
+  e2e:
+    name: E2E tests (Playwright)
+    runs-on: ubuntu-latest
+
+    # DF-21.6: a real Postgres, not a mock -- these tests exercise the app
+    # through actual route handlers and Prisma queries (see
+    # playwright.config.ts's top comment), unlike the vitest suite above.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: demoforge
+          POSTGRES_PASSWORD: demoforge
+          POSTGRES_DB: demoforge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U demoforge"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://demoforge:demoforge@localhost:5432/demoforge
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      # Fake-but-shape-valid Supabase values -- lib/env.ts's validateEnv()
+      # only checks that NEXT_PUBLIC_SUPABASE_URL is a well-formed URL and
+      # that SUPABASE_SERVICE_ROLE_KEY is a non-empty string; neither is
+      # ever dereferenced against a real Supabase project by the one
+      # existing E2E spec (DEMOFORGE_STUB_RENDER covers the render path,
+      # and recording upload isn't exercised either), so these just need
+      # to pass startup validation, not be real credentials.
+      NEXT_PUBLIC_SUPABASE_URL: https://fake.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: fake-service-role-key-for-ci
+      # A dev-instance Clerk app dedicated to CI, plus a standing test user
+      # on it -- never point these at a production Clerk instance (see
+      # e2e/global.setup.ts). All three are repo/org secrets, not committed.
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.E2E_CLERK_PUBLISHABLE_KEY }}
+      CLERK_SECRET_KEY: ${{ secrets.E2E_CLERK_SECRET_KEY }}
+      E2E_CLERK_USER_EMAIL: ${{ secrets.E2E_CLERK_USER_EMAIL }}
+      NEXT_PUBLIC_CLERK_SIGN_IN_URL: /sign-in
+      NEXT_PUBLIC_CLERK_SIGN_UP_URL: /sign-up
+      NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL: /dashboard
+      NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL: /dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run prisma:generate
+
+      # DF-21.6: schema only, against the fresh service container above --
+      # `migrate deploy` (not `migrate dev`) since this is CI, not a local
+      # dev database, and there are no migrations to interactively create.
+      - run: npx prisma migrate deploy
+
+      - name: Install Playwright's Chromium
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts's webServer starts `npm run dev` itself (with
+      # DEMOFORGE_STUB_RENDER=1) and waits for it to respond -- no separate
+      # "start the app" step is needed here.
+      - run: npm run test:e2e
+
+      - name: Upload E2E artifacts (traces/screenshots/videos)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore
